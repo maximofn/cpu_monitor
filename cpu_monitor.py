@@ -17,12 +17,7 @@ def main():
     CPU_indicator.set_menu(build_menu())
 
     # Get CPU info
-    cpu_temps = get_cpu_info()
-    print(cpu_temps)
-
-    info = f"{cpu_temps['Tctl']}ºC"
-
-    CPU_indicator.set_label(info, "Indicator")
+    GLib.timeout_add_seconds(1, update_cpu_info, CPU_indicator)
 
     GLib.MainLoop().run()
 
@@ -34,6 +29,15 @@ def build_menu():
     # menu.show_all()
     return menu
 
+def update_cpu_info(indicator):
+    cpu_temps = get_cpu_info()
+
+    info = f"{cpu_temps['Tctl']}ºC"
+
+    indicator.set_label(info, "Indicator")
+
+    return True
+
 def get_cpu_info():
     sensors_output = subprocess.check_output(['sensors']).decode('utf-8')
     temperatures = {}
@@ -43,7 +47,6 @@ def get_cpu_info():
             temp = float(line.split('+')[1].split('°')[0])
             temperatures['Tctl'] = temp
         if "Tccd1" in line:
-            print(line)
             # Asumiendo que el formato es "Tccd1:        +XX.X°C"
             temp = float(line.split('+')[1].split('°')[0])
             temperatures['Tccd1'] = temp
