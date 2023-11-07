@@ -1,2 +1,4 @@
 #!/usr/bin/bash
-/usr/bin/python3 /home/wallabot/Documentos/system_monitor/cpu_monitor/cpu_monitor.py
+# Get script path
+SCRIPT_PATH=$(dirname $0)
+/usr/bin/python3 $SCRIPT_PATH/cpu_monitor.py

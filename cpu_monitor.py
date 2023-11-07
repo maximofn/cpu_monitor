@@ -32,7 +32,11 @@ def build_menu():
 def update_cpu_info(indicator):
     cpu_temps = get_cpu_info()
 
-    info = f"{cpu_temps['Tctl']}ºC"
+    # info = f"{cpu_temps['Tctl']}ºC"
+    if 'Tctl' in cpu_temps.keys():
+        info = f"{cpu_temps['Tctl']}ºC"
+    elif 'Package id 0' in cpu_temps.keys():
+        info = f"{cpu_temps['Package id 0']}ºC"
 
     indicator.set_label(info, "Indicator")
 
@@ -50,6 +54,10 @@ def get_cpu_info():
             # Asumiendo que el formato es "Tccd1:        +XX.X°C"
             temp = float(line.split('+')[1].split('°')[0])
             temperatures['Tccd1'] = temp
+        if "Package id 0" in line:
+            # Asumiendo que el formato es "Package id 0:  +XX.X°C"
+            temp = float(line.split('+')[1].split('°')[0])
+            temperatures['Package id 0'] = temp
     return temperatures
 
 if __name__ == "__main__":
