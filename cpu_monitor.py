@@ -31,6 +31,20 @@ def buy_me_a_coffe(_):
 def build_menu():
     menu = gtk.Menu()
 
+    cpu_temps = get_cpu_info()
+
+    # info = f"{cpu_temps['Tctl']}ºC"
+    if 'Tctl' in cpu_temps.keys():
+        cpu_temp = f"{cpu_temps['Tctl']}ºC"
+    elif 'Package id 0' in cpu_temps.keys():
+        cpu_temp = f"{cpu_temps['Package id 0']}ºC"
+    
+    cpu_temp_item = gtk.MenuItem(label=f"CPU Temp: {cpu_temp}")
+    menu.append(cpu_temp_item)
+
+    horizontal_separator1 = gtk.SeparatorMenuItem()
+    menu.append(horizontal_separator1)
+
     item_repo = gtk.MenuItem(label='Repository')
     item_repo.connect('activate', open_repo_link)
     menu.append(item_repo)
@@ -39,8 +53,8 @@ def build_menu():
     item_buy_me_a_coffe.connect('activate', buy_me_a_coffe)
     menu.append(item_buy_me_a_coffe)
 
-    horizontal_separator = gtk.SeparatorMenuItem()
-    menu.append(horizontal_separator)
+    horizontal_separator2 = gtk.SeparatorMenuItem()
+    menu.append(horizontal_separator2)
 
     item_quit = gtk.MenuItem(label='Quit')
     item_quit.connect('activate', quit)
