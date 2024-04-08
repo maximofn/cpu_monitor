@@ -42,6 +42,8 @@ FONT_WIDTH_FACTOR = 9
 image_to_show = None
 old_image_to_show = None
 
+cpu_temp_item = None
+
 def main():
     CPU_indicator = AppIndicator3.Indicator.new(APPINDICATOR_ID, ICON_PATH, AppIndicator3.IndicatorCategory.SYSTEM_SERVICES)
     CPU_indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
@@ -59,6 +61,8 @@ def buy_me_a_coffe(_):
     webbrowser.open('https://www.buymeacoffee.com/maximofn')
 
 def build_menu():
+    global cpu_temp_item
+
     menu = gtk.Menu()
 
     cpu_temps = get_cpu_info()
@@ -93,12 +97,15 @@ def build_menu():
     menu.show_all()
     return menu
 
+def update_menu(cpu_temp):
+    cpu_temp_item.set_label(f"CPU Temp: {cpu_temp}ºC")
+
 def update_cpu_info(indicator):
     global image_to_show
     global old_image_to_show
 
     # Generate disk info icon
-    get_cpu_info()
+    temperatures = get_cpu_info()
 
     # Show pie chart
     icon_path = os.path.abspath(f"{PATH}/{image_to_show}")
@@ -106,6 +113,13 @@ def update_cpu_info(indicator):
     
     # Update old image path
     old_image_to_show = image_to_show
+
+    # Update menu
+    if 'Tctl' in temperatures.keys():
+        cpu_temp = f"{temperatures['Tctl']}ºC"
+    elif 'Package id 0' in temperatures.keys():
+        cpu_temp = f"{temperatures['Package id 0']}ºC"
+    update_menu(cpu_temp)
 
     return True
 
