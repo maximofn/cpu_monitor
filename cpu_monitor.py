@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import time
 import re
 from PIL import Image, ImageDraw, ImageFont
+import argparse
 
 APPINDICATOR_ID = 'GPU_monitor'
 
@@ -44,13 +45,13 @@ old_image_to_show = None
 
 cpu_temp_item = None
 
-def main():
+def main(debug=False):
     CPU_indicator = AppIndicator3.Indicator.new(APPINDICATOR_ID, ICON_PATH, AppIndicator3.IndicatorCategory.SYSTEM_SERVICES)
     CPU_indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
     CPU_indicator.set_menu(build_menu())
 
     # Get CPU info
-    GLib.timeout_add_seconds(1, update_cpu_info, CPU_indicator)
+    GLib.timeout_add_seconds(1, update_cpu_info, CPU_indicator, debug)
 
     GLib.MainLoop().run()
 
@@ -60,12 +61,12 @@ def open_repo_link(_):
 def buy_me_a_coffe(_):
     webbrowser.open('https://www.buymeacoffee.com/maximofn')
 
-def build_menu():
+def build_menu(debug=False):
     global cpu_temp_item
 
     menu = gtk.Menu()
 
-    cpu_temps = get_cpu_info()
+    cpu_temps = get_cpu_info(debug)
 
     # info = f"{cpu_temps['Tctl']}ºC"
     if 'Tctl' in cpu_temps.keys():
@@ -100,16 +101,17 @@ def build_menu():
 def update_menu(cpu_temp):
     cpu_temp_item.set_label(f"CPU Temp: {cpu_temp}ºC")
 
-def update_cpu_info(indicator):
+def update_cpu_info(indicator, debug=False):
     global image_to_show
     global old_image_to_show
 
     # Generate disk info icon
-    temperatures = get_cpu_info()
+    temperatures = get_cpu_info(debug)
 
     # Show pie chart
-    icon_path = os.path.abspath(f"{PATH}/{image_to_show}")
-    indicator.set_icon_full(icon_path, "disk usage")
+    if not debug:
+        icon_path = os.path.abspath(f"{PATH}/{image_to_show}")
+        indicator.set_icon_full(icon_path, "disk usage")
     
     # Update old image path
     old_image_to_show = image_to_show
@@ -123,7 +125,7 @@ def update_cpu_info(indicator):
 
     return True
 
-def get_cpu_info():
+def get_cpu_info(debug=False):
     global image_to_show
     global old_image_to_show
 
@@ -153,44 +155,49 @@ def get_cpu_info():
     scaled_cpu_icon = cpu_icon.resize((cpu_icon_width, ICON_HEIGHT), Image.LANCZOS)
 
     # New image with the combined icons
-    if 'Tctl' in temperatures.keys():
-        temp_to_str = temperatures['Tctl']
-    elif 'Package id 0' in temperatures.keys():
-        temp_to_str = temperatures['Package id 0']
-    i_str = str(f" {temp_to_str}ºC")
-    i_str_width = len(i_str) * FONT_WIDTH_FACTOR
-    total_width = scaled_cpu_icon.width + i_str_width
-    combined_image = Image.new('RGBA', (total_width, ICON_HEIGHT+PADDING), (0, 0, 0, 0))  # Transparent background
+    if not debug:
+        if 'Tctl' in temperatures.keys():
+            temp_to_str = temperatures['Tctl']
+        elif 'Package id 0' in temperatures.keys():
+            temp_to_str = temperatures['Package id 0']
+        i_str = str(f" {temp_to_str}ºC")
+        i_str_width = len(i_str) * FONT_WIDTH_FACTOR
+        total_width = scaled_cpu_icon.width + i_str_width
+        combined_image = Image.new('RGBA', (total_width, ICON_HEIGHT+PADDING), (0, 0, 0, 0))  # Transparent background
 
     # Combine icons
-    cpu_icon_position = (0, int(PADDING/2))
-    combined_image.paste(scaled_cpu_icon, cpu_icon_position, scaled_cpu_icon)
+    if not debug:
+        cpu_icon_position = (0, int(PADDING/2))
+        combined_image.paste(scaled_cpu_icon, cpu_icon_position, scaled_cpu_icon)
 
     # Create font object
-    draw = ImageDraw.Draw(combined_image)
-    font_size = int(ICON_HEIGHT * FONT_SIZE_FACTOR)
-    font = ImageFont.truetype(FONT_PATH, font_size)
+    if not debug:
+        draw = ImageDraw.Draw(combined_image)
+        font_size = int(ICON_HEIGHT * FONT_SIZE_FACTOR)
+        font = ImageFont.truetype(FONT_PATH, font_size)
 
     # Set position of text
-    text_position = (scaled_cpu_icon.width, int((ICON_HEIGHT + PADDING - font_size) / 2))
+    if not debug: text_position = (scaled_cpu_icon.width, int((ICON_HEIGHT + PADDING - font_size) / 2))
 
     # Draw text
-    if temp_to_str < TEMPERATURE_WARNING1:
-        used_color = WHITE_FONT_COLOR
-    elif temp_to_str >= TEMPERATURE_WARNING1 and temp_to_str < TEMPERATURE_WARNING2:
-        used_color = YELLOW_FONT_COLOR
-    elif temp_to_str >= TEMPERATURE_WARNING2 and temp_to_str < TEMPERATURE_CAUTION:
-        used_color = ORANGE_FONT_COLOR
-    elif temp_to_str >= TEMPERATURE_CAUTION:
-        used_color = RED_FONT_COLOR
-    else:
-        used_color = WHITE_FONT_COLOR
-    draw.text(text_position, i_str, font=font, fill=used_color)
+    if not debug:
+        if temp_to_str < TEMPERATURE_WARNING1:
+            used_color = WHITE_FONT_COLOR
+        elif temp_to_str >= TEMPERATURE_WARNING1 and temp_to_str < TEMPERATURE_WARNING2:
+            used_color = YELLOW_FONT_COLOR
+        elif temp_to_str >= TEMPERATURE_WARNING2 and temp_to_str < TEMPERATURE_CAUTION:
+            used_color = ORANGE_FONT_COLOR
+        elif temp_to_str >= TEMPERATURE_CAUTION:
+            used_color = RED_FONT_COLOR
+        else:
+            used_color = WHITE_FONT_COLOR
+        draw.text(text_position, i_str, font=font, fill=used_color)
 
     # Save combined image
-    timestamp = int(time.time())
-    image_to_show = f'cpu_info_{timestamp}.png'
-    combined_image.save(f'{PATH}/{image_to_show}')
+    if not debug:
+        timestamp = int(time.time())
+        image_to_show = f'cpu_info_{timestamp}.png'
+        combined_image.save(f'{PATH}/{image_to_show}')
 
     # Remove old image
     if os.path.exists(f'{PATH}/{old_image_to_show}'):
@@ -199,10 +206,16 @@ def get_cpu_info():
     return temperatures
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='CPU Monitor')
+    parser.add_argument('--debug', action='store_true', help='Debug mode')
+    args = parser.parse_args()
+    debug = args.debug
+
     # Remove all cpu_info_*.png files
-    for file in os.listdir(PATH):
-        if re.search(r'cpu_info_\d+.png', file):
-            os.remove(f'{PATH}/{file}')
+    if not debug:
+        for file in os.listdir(PATH):
+            if re.search(r'cpu_info_\d+.png', file):
+                os.remove(f'{PATH}/{file}')
 
     signal.signal(signal.SIGINT, signal.SIG_DFL) # Allow the program to be terminated with Ctrl+C
-    main()
+    main(debug)
