@@ -2,6 +2,8 @@
 
 Monitor of CPU temperature for Ubuntu menu bar
 
+![cpu monitor](cpu_monitor.gif)
+
 ## Installation
 
 ```bash
@@ -18,4 +20,10 @@ Install psensor
 
 ```bash
 sudo apt install psensor
+```
+
+## Add to startup
+
+```bash
+cpu_monitor.sh
 ```
