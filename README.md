@@ -59,8 +59,10 @@ sudo apt install psensor
 ## Execution at start-up
 
 ```bash
-cpu_monitor.sh
+add_to_startup.sh
 ```
+
+Then when you restart your computer, the CPU Monitor will start automatically.
 
 ## Support
 
