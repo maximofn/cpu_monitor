@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-import signal
-import gi
-gi.require_version('AppIndicator3', '0.1')
-from gi.repository import AppIndicator3, GLib
-from gi.repository import Gtk as gtk
-import os
-import subprocess
-import webbrowser
-import matplotlib.pyplot as plt
-import time
-import re
-from PIL import Image, ImageDraw, ImageFont
 import argparse
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+import webbrowser
+
+from PIL import Image, ImageDraw, ImageFont
 
 APPINDICATOR_ID = 'GPU_monitor'
 
@@ -44,6 +41,51 @@ image_to_show = None
 old_image_to_show = None
 
 cpu_temp_item = None
+AppIndicator3 = None
+GLib = None
+gtk = None
+
+
+def has_graphical_session():
+    return any(os.environ.get(variable) for variable in ('DISPLAY', 'WAYLAND_DISPLAY'))
+
+
+def load_gui_dependencies():
+    global AppIndicator3
+    global GLib
+    global gtk
+
+    import gi
+    gi.require_version('AppIndicator3', '0.1')
+    from gi.repository import AppIndicator3 as appindicator3
+    from gi.repository import GLib as glib
+    from gi.repository import Gtk as gtk_module
+
+    AppIndicator3 = appindicator3
+    GLib = glib
+    gtk = gtk_module
+
+
+def get_primary_temperature(temperatures):
+    for key in ('Tctl', 'Package id 0'):
+        if key in temperatures:
+            return temperatures[key]
+    return None
+
+
+def print_debug_temperatures():
+    temperatures = get_cpu_info(debug=True)
+
+    if not temperatures:
+        print('No CPU temperature sensors detected.')
+        return
+
+    for sensor_name, sensor_value in temperatures.items():
+        print(f'{sensor_name}: {sensor_value}ºC')
+
+    primary_temperature = get_primary_temperature(temperatures)
+    if primary_temperature is not None:
+        print(f'CPU Temp: {primary_temperature}ºC')
 
 def main(debug=False):
     CPU_indicator = AppIndicator3.Indicator.new(APPINDICATOR_ID, ICON_PATH, AppIndicator3.IndicatorCategory.SYSTEM_SERVICES)
@@ -69,10 +111,11 @@ def build_menu(debug=False):
     cpu_temps = get_cpu_info(debug)
 
     # info = f"{cpu_temps['Tctl']}ºC"
-    if 'Tctl' in cpu_temps.keys():
-        cpu_temp = f"{cpu_temps['Tctl']}ºC"
-    elif 'Package id 0' in cpu_temps.keys():
-        cpu_temp = f"{cpu_temps['Package id 0']}ºC"
+    cpu_temp_value = get_primary_temperature(cpu_temps)
+    if cpu_temp_value is None:
+        cpu_temp = 'N/A'
+    else:
+        cpu_temp = f"{cpu_temp_value}ºC"
     
     cpu_temp_item = gtk.MenuItem(label=f"CPU Temp: {cpu_temp}")
     menu.append(cpu_temp_item)
@@ -117,11 +160,9 @@ def update_cpu_info(indicator, debug=False):
     old_image_to_show = image_to_show
 
     # Update menu
-    if 'Tctl' in temperatures.keys():
-        cpu_temp = f"{temperatures['Tctl']}ºC"
-    elif 'Package id 0' in temperatures.keys():
-        cpu_temp = f"{temperatures['Package id 0']}ºC"
-    update_menu(cpu_temp)
+    cpu_temp = get_primary_temperature(temperatures)
+    if cpu_temp is not None:
+        update_menu(cpu_temp)
 
     return True
 
@@ -145,6 +186,9 @@ def get_cpu_info(debug=False):
             # Asumiendo que el formato es "Package id 0:  +XX.X°C"
             temp = float(line.split('+')[1].split('°')[0])
             temperatures['Package id 0'] = temp
+
+    if debug:
+        return temperatures
 
     # Load icon
     cpu_icon = Image.open(f'{PATH}/cpu.png')
@@ -210,6 +254,19 @@ if __name__ == "__main__":
     parser.add_argument('--debug', action='store_true', help='Debug mode')
     args = parser.parse_args()
     debug = args.debug
+
+    if not has_graphical_session():
+        if debug:
+            print_debug_temperatures()
+            sys.exit(0)
+
+        print(
+            'No graphical session detected. Set DISPLAY or WAYLAND_DISPLAY before running cpu_monitor.py, or use --debug for console output.',
+            file=sys.stderr,
+        )
+        sys.exit(0)
+
+    load_gui_dependencies()
 
     # Remove all cpu_info_*.png files
     if not debug:
