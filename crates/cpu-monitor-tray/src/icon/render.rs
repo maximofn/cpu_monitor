@@ -2,13 +2,15 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use cpu_monitor_core::Cpu;
-use fontdue::Font;
+use freetype::face::LoadFlag;
+use freetype::{Face, Library};
 use image::ImageReader;
 use tiny_skia::{BlendMode, FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Transform};
 
 const DONUT_PADDING: u32 = 2;
-// Regular weight + fontdue's TrueType hinting matches the look of PIL/freetype
-// (the legacy Python tray). Bold or unhinted Regular renders fat/blurry at 11px.
+// Regular weight con `freetype` (mismo motor que PIL/freetype del tray Python).
+// `fontdue`/`ab_glyph` rasterizan borroso a 10–12 px (ver consejos.md del
+// gpu_monitor) — solo freetype iguala al original byte-a-byte.
 const DEFAULT_FONT_PATHS: &[&str] = &[
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
     "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
@@ -18,23 +20,18 @@ const DEFAULT_FONT_PATHS: &[&str] = &[
     "/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
 ];
 
-// Match the Python palette (cpu_monitor.py) so the visual weight matches the legacy tray.
-const COLOR_TEXT_OK: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
-const COLOR_TEXT_WARN1: [u8; 4] = [0xff, 0xdb, 0x4d, 0xff];
-const COLOR_TEXT_WARN2: [u8; 4] = [0xff, 0xcc, 0x99, 0xff];
-const COLOR_TEXT_HIGH: [u8; 4] = [0xff, 0x66, 0x66, 0xff];
-const COLOR_TEXT_DISCONNECTED: [u8; 4] = [0xaa, 0xaa, 0xaa, 0xff];
+const COLOR_FREE: [u8; 4] = [0x66, 0xb3, 0xff, 0xff];
+const COLOR_OK: [u8; 4] = [0x99, 0xff, 0x99, 0xff];
+const COLOR_WARN1: [u8; 4] = [0xff, 0xdb, 0x4d, 0xff];
+const COLOR_WARN2: [u8; 4] = [0xff, 0xcc, 0x99, 0xff];
+const COLOR_HIGH: [u8; 4] = [0xff, 0x66, 0x66, 0xff];
+const COLOR_TEXT: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
+const COLOR_DISCONNECTED_TEXT: [u8; 4] = [0xaa, 0xaa, 0xaa, 0xff];
 
-const COLOR_DONUT_FREE: [u8; 4] = [0x66, 0xb3, 0xff, 0xff];
-const COLOR_DONUT_OK: [u8; 4] = [0x99, 0xff, 0x99, 0xff];
-const COLOR_DONUT_WARN1: [u8; 4] = [0xff, 0xdb, 0x4d, 0xff];
-const COLOR_DONUT_WARN2: [u8; 4] = [0xff, 0xcc, 0x99, 0xff];
-const COLOR_DONUT_HIGH: [u8; 4] = [0xff, 0x66, 0x66, 0xff];
-
-// Temperature thresholds (°C), mirror cpu_monitor.py.
-const TEMP_WARN1: f32 = 70.0;
-const TEMP_WARN2: f32 = 80.0;
-const TEMP_HIGH: f32 = 90.0;
+// Umbrales de temperatura del label (consejos.md del gpu_monitor):
+// <60 ºC blanco, 60–79 ºC amarillo, ≥80 ºC rojo.
+const TEMP_WARN_LOW: u32 = 60;
+const TEMP_WARN_HIGH: u32 = 80;
 
 pub struct RenderedIcon {
     pub width: i32,
@@ -44,20 +41,34 @@ pub struct RenderedIcon {
     pub argb: Vec<u8>,
 }
 
+// freetype::Library y freetype::Face contienen punteros C crudos y por eso no
+// implementan Send. Pero ksni::TrayService::spawn exige Send en el state.
+// El acceso aquí es secuencial (solo desde la callback de update en el thread
+// de ksni), nunca concurrente, así que es seguro afirmar Send a mano.
+struct FtState {
+    _library: Library,
+    face: Face,
+}
+unsafe impl Send for FtState {}
+unsafe impl Sync for FtState {}
+
 pub struct IconRenderer {
     height: u32,
     base_icon: Option<Pixmap>,
-    font: Font,
+    ft: FtState,
 }
 
 impl IconRenderer {
     pub fn new(height: u32, base_icon_path: &Path) -> Result<Self> {
         let base_icon = load_base_icon(base_icon_path, height).ok();
-        let font = load_font().context("loading DejaVu Sans Mono font")?;
+        let (ft_library, face) = load_face().context("loading DejaVu Sans Mono font")?;
         Ok(Self {
             height,
             base_icon,
-            font,
+            ft: FtState {
+                _library: ft_library,
+                face,
+            },
         })
     }
 
@@ -84,17 +95,23 @@ impl IconRenderer {
     fn render_pixmap(&self, cpu: Option<&Cpu>, connected: bool) -> Pixmap {
         let h = self.height;
         let donut_size = h.saturating_sub(DONUT_PADDING * 2).max(8);
-        let temp_label = match cpu.and_then(|c| c.temperature_c) {
-            Some(t) => format!(" {:.1}\u{00b0}C", t),
-            None => " --.-\u{00b0}C".to_string(),
+
+        let temp_int = cpu.and_then(|c| c.temperature_c).map(|t| t.round() as u32);
+        let temp_label = match temp_int {
+            // El `:>2` reserva 2 chars para que `5ºC` y `45ºC` no muevan el donut.
+            Some(t) => format!("{:>2}\u{00ba}C", t),
+            None => " --\u{00ba}C".to_string(),
         };
-        let text_w = self.measure_text(&temp_label, text_size(h));
+        let px = text_size(h);
+        // Reserva ancho fijo para que la posición del donut no salte cuando la
+        // temperatura cambia entre 2 y 3 dígitos.
+        let text_w = self.measure_text("999\u{00ba}C", px);
         let icon_w = self.base_icon.as_ref().map(|p| p.width()).unwrap_or(0);
-        let total_w = icon_w + text_w + 2 + donut_size;
+        let total_w = icon_w + 2 + text_w + 2 + donut_size;
 
         let mut pixmap = Pixmap::new(total_w.max(h), h).expect("non-zero pixmap");
 
-        // 1. CPU icon
+        // 1. Icono CPU
         if let Some(ref icon) = self.base_icon {
             let icon_y = (self.height as i32 - icon.height() as i32) / 2;
             pixmap.draw_pixmap(
@@ -107,24 +124,22 @@ impl IconRenderer {
             );
         }
 
-        // 2. Temperature text
-        let text_color = if !connected {
-            COLOR_TEXT_DISCONNECTED
+        // 2. Texto de temperatura
+        let neutral_color = if connected {
+            COLOR_TEXT
         } else {
-            cpu.and_then(|c| c.temperature_c)
-                .map(temp_color)
-                .unwrap_or(COLOR_TEXT_OK)
+            COLOR_DISCONNECTED_TEXT
         };
-        self.draw_text(
-            &mut pixmap,
-            icon_w as f32,
-            &temp_label,
-            text_size(self.height),
-            text_color,
-        );
+        let label_color = if !connected {
+            neutral_color
+        } else {
+            temp_int.map(temp_label_color).unwrap_or(COLOR_TEXT)
+        };
+        let text_x = (icon_w + 2) as f32;
+        self.draw_text(&mut pixmap, text_x, &temp_label, px, label_color);
 
-        // 3. CPU usage donut
-        let donut_x = (icon_w + text_w + 2) as f32;
+        // 3. Donut con porcentaje de uso de CPU
+        let donut_x = (icon_w + 2 + text_w + 2) as f32;
         let usage_pct = cpu.map(|c| c.usage_percent).unwrap_or(0.0);
         draw_donut(
             &mut pixmap,
@@ -135,41 +150,75 @@ impl IconRenderer {
             connected,
         );
 
+        // Porcentaje numérico centrado en el hueco del donut. Tamaño 8 px:
+        // entra "100" (3 chars × ~4.8 px advance ≈ 14 px) en el inner diameter.
+        // Color neutro (consejos.md): el wedge del anillo ya hace el código de
+        // colores; pintar el número rojo encima de un anillo rojo es ruidoso.
+        let pct_text = (usage_pct.round().clamp(0.0, 999.0) as u32).to_string();
+        let pct_size = 8.0;
+        let pct_w = self.measure_text(&pct_text, pct_size) as f32;
+        let pct_x = donut_x + donut_size as f32 / 2.0 - pct_w / 2.0;
+        self.draw_text(&mut pixmap, pct_x, &pct_text, pct_size, neutral_color);
+
         pixmap
     }
 
     fn measure_text(&self, text: &str, px: f32) -> u32 {
-        let width: f32 = text
-            .chars()
-            .map(|c| self.font.metrics(c, px).advance_width)
-            .sum();
-        width.ceil() as u32
+        let px_size = px.round() as u32;
+        if self.ft.face.set_pixel_sizes(0, px_size).is_err() {
+            return 0;
+        }
+        let mut width: i64 = 0;
+        for ch in text.chars() {
+            if self
+                .ft
+                .face
+                .load_char(ch as usize, LoadFlag::DEFAULT)
+                .is_err()
+            {
+                continue;
+            }
+            // advance.x viene en 26.6 fixed-point; >>6 para pasar a pixeles.
+            width += self.ft.face.glyph().advance().x >> 6;
+        }
+        width.max(0) as u32
     }
 
     fn draw_text(&self, pixmap: &mut Pixmap, x: f32, text: &str, px: f32, color: [u8; 4]) {
-        let line = self
-            .font
-            .horizontal_line_metrics(px)
-            .unwrap_or(fontdue::LineMetrics {
-                ascent: px,
-                descent: 0.0,
-                line_gap: 0.0,
-                new_line_size: px,
-            });
-        let baseline_y = ((self.height as f32 - px) / 2.0) + line.ascent;
-        let mut cursor_x = x;
+        let px_size = px.round() as u32;
+        if self.ft.face.set_pixel_sizes(0, px_size).is_err() {
+            return;
+        }
+        let ascent_px = (self.ft.face.size_metrics().map(|m| m.ascender).unwrap_or(0) >> 6) as f32;
+        let baseline_y = (((self.height as f32 - px_size as f32) / 2.0) + ascent_px).round() as i32;
+        let mut pen_x = x.round() as i32;
         for ch in text.chars() {
-            let (metrics, bitmap) = self.font.rasterize(ch, px);
-            let glyph_left = cursor_x + metrics.xmin as f32;
-            let glyph_top = baseline_y - (metrics.height as f32 + metrics.ymin as f32);
-            for gy in 0..metrics.height {
-                for gx in 0..metrics.width {
-                    let coverage = bitmap[gy * metrics.width + gx];
+            if self
+                .ft
+                .face
+                .load_char(ch as usize, LoadFlag::RENDER | LoadFlag::TARGET_NORMAL)
+                .is_err()
+            {
+                continue;
+            }
+            let glyph = self.ft.face.glyph();
+            let bmp = glyph.bitmap();
+            let buffer = bmp.buffer();
+            let bw = bmp.width();
+            let bh = bmp.rows();
+            let pitch = bmp.pitch();
+            let glyph_left = pen_x + glyph.bitmap_left();
+            let glyph_top = baseline_y - glyph.bitmap_top();
+            for gy in 0..bh {
+                let row_start = (gy * pitch) as isize;
+                for gx in 0..bw {
+                    let idx = (row_start + gx as isize) as usize;
+                    let coverage = buffer[idx];
                     if coverage == 0 {
                         continue;
                     }
-                    let px_x = (glyph_left + gx as f32).round() as i32;
-                    let px_y = (glyph_top + gy as f32).round() as i32;
+                    let px_x = glyph_left + gx;
+                    let px_y = glyph_top + gy;
                     if px_x < 0 || px_y < 0 {
                         continue;
                     }
@@ -182,40 +231,14 @@ impl IconRenderer {
                     );
                 }
             }
-            cursor_x += metrics.advance_width;
+            pen_x += (glyph.advance().x >> 6) as i32;
         }
     }
 }
 
 fn text_size(h: u32) -> f32 {
-    // Matches the Python tray's FONT_SIZE_FACTOR=0.5 (cpu_monitor.py:37). Bumping
-    // up to 0.55 looks marginally crisper but breaks visual parity with the legacy
-    // icon — keep the original ratio so a side-by-side dump matches.
-    (h as f32 * 0.50).clamp(8.0, 16.0)
-}
-
-fn temp_color(temp: f32) -> [u8; 4] {
-    if temp >= TEMP_HIGH {
-        COLOR_TEXT_HIGH
-    } else if temp >= TEMP_WARN2 {
-        COLOR_TEXT_WARN2
-    } else if temp >= TEMP_WARN1 {
-        COLOR_TEXT_WARN1
-    } else {
-        COLOR_TEXT_OK
-    }
-}
-
-fn used_color(pct: f32) -> [u8; 4] {
-    if pct >= 90.0 {
-        COLOR_DONUT_HIGH
-    } else if pct >= 80.0 {
-        COLOR_DONUT_WARN2
-    } else if pct >= 70.0 {
-        COLOR_DONUT_WARN1
-    } else {
-        COLOR_DONUT_OK
-    }
+    // Redondear a píxel entero: freetype hintea limpio solo a tamaños enteros.
+    (h as f32 * 0.45).round().clamp(8.0, 16.0)
 }
 
 fn load_base_icon(path: &Path, target_h: u32) -> Result<Pixmap> {
@@ -241,11 +264,14 @@ fn load_base_icon(path: &Path, target_h: u32) -> Result<Pixmap> {
     Ok(pixmap)
 }
 
-fn load_font() -> Result<Font> {
+fn load_face() -> Result<(Library, Face)> {
+    let library = Library::init().context("initializing freetype library")?;
     for path in DEFAULT_FONT_PATHS {
-        if let Ok(bytes) = std::fs::read(path) {
-            return Font::from_bytes(bytes, fontdue::FontSettings::default())
-                .map_err(|e| anyhow!("parsing font {}: {}", path, e));
+        if std::path::Path::new(path).exists() {
+            let face = library
+                .new_face(path, 0)
+                .map_err(|e| anyhow!("loading font {}: {}", path, e))?;
+            return Ok((library, face));
         }
     }
     anyhow::bail!(
@@ -254,14 +280,36 @@ fn load_font() -> Result<Font> {
     );
 }
 
+fn used_color(pct: f32) -> [u8; 4] {
+    if pct >= 90.0 {
+        COLOR_HIGH
+    } else if pct >= 80.0 {
+        COLOR_WARN2
+    } else if pct >= 70.0 {
+        COLOR_WARN1
+    } else {
+        COLOR_OK
+    }
+}
+
+fn temp_label_color(temp: u32) -> [u8; 4] {
+    if temp >= TEMP_WARN_HIGH {
+        COLOR_HIGH
+    } else if temp >= TEMP_WARN_LOW {
+        COLOR_WARN1
+    } else {
+        COLOR_TEXT
+    }
+}
+
 fn draw_donut(pixmap: &mut Pixmap, x: f32, y: f32, size: u32, used_pct: f32, connected: bool) {
     let cx = x + size as f32 / 2.0;
     let cy = y + size as f32 / 2.0;
     let r_outer = size as f32 / 2.0;
-    let r_inner = r_outer * 0.72;
+    let r_inner = r_outer * 0.78;
 
     let free_color = if connected {
-        COLOR_DONUT_FREE
+        COLOR_FREE
     } else {
         [0x80, 0x80, 0x80, 0xff]
     };
@@ -416,22 +464,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn temp_color_thresholds() {
-        assert_eq!(temp_color(50.0), COLOR_TEXT_OK);
-        assert_eq!(temp_color(69.9), COLOR_TEXT_OK);
-        assert_eq!(temp_color(70.0), COLOR_TEXT_WARN1);
-        assert_eq!(temp_color(80.0), COLOR_TEXT_WARN2);
-        assert_eq!(temp_color(89.9), COLOR_TEXT_WARN2);
-        assert_eq!(temp_color(90.0), COLOR_TEXT_HIGH);
-        assert_eq!(temp_color(100.0), COLOR_TEXT_HIGH);
+    fn temp_label_color_thresholds() {
+        assert_eq!(temp_label_color(0), COLOR_TEXT);
+        assert_eq!(temp_label_color(59), COLOR_TEXT);
+        assert_eq!(temp_label_color(60), COLOR_WARN1);
+        assert_eq!(temp_label_color(79), COLOR_WARN1);
+        assert_eq!(temp_label_color(80), COLOR_HIGH);
+        assert_eq!(temp_label_color(100), COLOR_HIGH);
     }
 
     #[test]
     fn used_color_thresholds() {
-        assert_eq!(used_color(0.0), COLOR_DONUT_OK);
-        assert_eq!(used_color(70.0), COLOR_DONUT_WARN1);
-        assert_eq!(used_color(80.0), COLOR_DONUT_WARN2);
-        assert_eq!(used_color(95.0), COLOR_DONUT_HIGH);
+        assert_eq!(used_color(0.0), COLOR_OK);
+        assert_eq!(used_color(70.0), COLOR_WARN1);
+        assert_eq!(used_color(80.0), COLOR_WARN2);
+        assert_eq!(used_color(95.0), COLOR_HIGH);
     }
 
     #[test]
