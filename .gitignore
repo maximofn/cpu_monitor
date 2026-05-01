@@ -160,3 +160,22 @@ cython_debug/
 #.idea/
 
 cpu_inf*.png
+
+# Rust
+target/
+*.rs.bk
+Cargo.lock.bak
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code agent state
+.claude/
