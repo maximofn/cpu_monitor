@@ -82,6 +82,26 @@ add_to_startup.sh
 
 Then when you restart your computer, the CPU Monitor will start automatically.
 
+## Home Assistant integration
+
+Surface CPU state as native HA sensors with no custom component — just a YAML package on top of `default_config`'s `rest` integration. Polls `/v1/snapshot` every 15 s and exposes 16 entities (host metadata + usage/temperature/frequency/load averages/uptime/top process, plus `per_core_usage` and `temperatures` arrays as attributes on `sensor.cpu_usage`).
+
+```bash
+# On the raspberry running Home Assistant:
+cd home-assistant/tunnel
+./install.sh                                 # generates dedicated SSH key, installs systemd user unit
+# (paste the printed pubkey line into the CPU host's ~/.ssh/authorized_keys)
+
+# Copy the package and reload HA:
+cp ../packages/cpu_monitor.yaml /config/packages/
+# Add to /config/configuration.yaml (one-time per HA install):
+#   homeassistant:
+#     packages: !include_dir_named packages
+docker restart homeassistant
+```
+
+See [`home-assistant/README.md`](home-assistant/README.md) for the full deploy guide. The dedicated key is restricted with `restrict,port-forwarding,permitopen="127.0.0.1:9124"` so it can only forward to `cpu-monitord` and nothing else.
+
 ## Support
 
 Consider giving a **☆ Star** to this repository, if you also want to invite me for a coffee, click on the following button

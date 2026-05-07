@@ -1,0 +1,67 @@
+# Vista Lovelace para el CPU Monitor (formato `sections`, HA 2024+).
+#
+# Pegar como nueva entrada bajo `views:` en Settings → Dashboards → Edit
+# dashboard → tres puntos → Raw configuration editor.
+
+views:
+  - type: sections
+    title: CPU
+    path: cpu
+    icon: mdi:cpu-64-bit
+    header:
+      card:
+        type: markdown
+        text_only: true
+        content: |
+          # {{ states('sensor.cpu_monitor_host') }}
+          {{ states('sensor.cpu_monitor_model') }} · {{ states('sensor.cpu_monitor_physical_cores') }}c/{{ states('sensor.cpu_monitor_logical_cores') }}t · kernel `{{ states('sensor.cpu_monitor_kernel') }}`
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Estado
+            heading_style: title
+            icon: mdi:cpu-64-bit
+          - type: gauge
+            entity: sensor.cpu_usage
+            name: Uso CPU
+            min: 0
+            max: 100
+            severity:
+              green: 0
+              yellow: 60
+              red: 85
+          - type: gauge
+            entity: sensor.cpu_temperature
+            name: Temperatura
+            min: 20
+            max: 100
+            severity:
+              green: 20
+              yellow: 65
+              red: 85
+          - type: tile
+            entity: sensor.cpu_frequency
+          - type: tile
+            entity: sensor.cpu_load_1m
+          - type: tile
+            entity: sensor.cpu_load_5m
+          - type: tile
+            entity: sensor.cpu_load_15m
+          - type: tile
+            entity: sensor.cpu_top_process
+          - type: tile
+            entity: sensor.cpu_process_count
+          - type: tile
+            entity: sensor.cpu_uptime
+          - type: tile
+            entity: sensor.cpu_primary_sensor
+          - type: history-graph
+            hours_to_show: 6
+            grid_options:
+              columns: full
+            entities:
+              - sensor.cpu_usage
+              - sensor.cpu_temperature
+              - sensor.cpu_frequency
+              - sensor.cpu_load_1m

@@ -1,0 +1,32 @@
+[Unit]
+Description=SSH forward tunnel to CPU host (Home Assistant access to cpu-monitord)
+Documentation=file:///%h/projects/cpu_monitor/home-assistant/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Túnel directo: el puerto 9124 de la raspberry (loopback) reenvía al
+# 127.0.0.1:9124 del host con CPU. Como HA corre con --network host, leer
+# 127.0.0.1:9124 desde el contenedor llega aquí.
+#
+# La clave dedicada está restringida en wallabot a `permitopen="127.0.0.1:9124"`,
+# así que esta clave SOLO puede abrir ese forward — no shell, no otros puertos.
+#
+# -N: no comando remoto. -T: sin pty. ServerAlive: detecta cortes en <2 min.
+# ExitOnForwardFailure=yes: si el puerto 9124 ya está ocupado en raspihome,
+# fallamos rápido y systemd reinicia.
+ExecStart=/usr/bin/ssh -N -T \
+    -i %h/.ssh/id_ed25519_cpu_tunnel \
+    -o IdentitiesOnly=yes \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o ExitOnForwardFailure=yes \
+    -o StrictHostKeyChecking=accept-new \
+    -L 127.0.0.1:9124:127.0.0.1:9124 \
+    wallabot@wallabot
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,148 @@
+# CPU Monitor — paquete Home Assistant
+#
+# Drop-in para `packages/cpu_monitor.yaml`. Consume /v1/snapshot del daemon
+# `cpu-monitord` (puerto 9124) y expone una entidad por métrica.
+#
+# Asume conectividad a http://127.0.0.1:9124 desde el contenedor HA. Si el
+# daemon vive en otra máquina, monta un túnel SSH forward desde la pi al host
+# del CPU (ver home-assistant/tunnel/ en el repo).
+#
+# Per-core y sensores múltiples se exponen como ATRIBUTOS del sensor de
+# usage (no como entidades separadas) para no inflar el registro.
+
+rest:
+  - resource: http://127.0.0.1:9124/v1/snapshot
+    scan_interval: 15
+    timeout: 5
+    sensor:
+      # ---------- Datos de host ----------
+      - name: "CPU Monitor Host"
+        unique_id: cpu_monitor_host
+        value_template: "{{ value_json.host }}"
+        icon: mdi:server
+
+      - name: "CPU Monitor Kernel"
+        unique_id: cpu_monitor_kernel
+        value_template: "{{ value_json.kernel }}"
+        icon: mdi:linux
+
+      - name: "CPU Monitor Model"
+        unique_id: cpu_monitor_model
+        value_template: "{{ value_json.cpu.model }}"
+        icon: mdi:chip
+
+      - name: "CPU Monitor Vendor"
+        unique_id: cpu_monitor_vendor
+        value_template: "{{ value_json.cpu.vendor }}"
+        icon: mdi:factory
+
+      - name: "CPU Monitor Logical Cores"
+        unique_id: cpu_monitor_logical_cores
+        value_template: "{{ value_json.cpu.logical_cores }}"
+        state_class: measurement
+        icon: mdi:chip
+
+      - name: "CPU Monitor Physical Cores"
+        unique_id: cpu_monitor_physical_cores
+        value_template: >-
+          {{ value_json.cpu.physical_cores if value_json.cpu.physical_cores is not none else None }}
+        state_class: measurement
+        icon: mdi:chip
+
+      # ---------- Métricas en vivo ----------
+      - name: "CPU Usage"
+        unique_id: cpu_monitor_usage
+        value_template: "{{ value_json.cpu.usage_percent | round(1) }}"
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: mdi:speedometer
+        # per_core_usage como atributo (lista de N floats), NO como N entidades.
+        # Visible en developer-tools y graficable con custom:apexcharts si quieres.
+        json_attributes_path: "$.cpu"
+        json_attributes:
+          - per_core_usage
+          - temperatures
+
+      - name: "CPU Temperature"
+        unique_id: cpu_monitor_temperature
+        value_template: >-
+          {% if value_json.cpu.temperature_c is not none -%}
+          {{ value_json.cpu.temperature_c | round(1) }}
+          {%- endif %}
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+
+      - name: "CPU Primary Sensor"
+        unique_id: cpu_monitor_primary_sensor
+        value_template: >-
+          {{ value_json.cpu.primary_sensor if value_json.cpu.primary_sensor is not none else None }}
+        icon: mdi:thermometer
+
+      - name: "CPU Frequency"
+        unique_id: cpu_monitor_frequency
+        value_template: >-
+          {% if value_json.cpu.frequency_mhz is not none -%}
+          {{ value_json.cpu.frequency_mhz | round(0) }}
+          {%- endif %}
+        unit_of_measurement: "MHz"
+        device_class: frequency
+        state_class: measurement
+        icon: mdi:sine-wave
+
+      - name: "CPU Load 1m"
+        unique_id: cpu_monitor_load_1m
+        value_template: >-
+          {% if value_json.cpu.load_average is not none -%}
+          {{ value_json.cpu.load_average.one | round(2) }}
+          {%- endif %}
+        state_class: measurement
+        icon: mdi:gauge
+
+      - name: "CPU Load 5m"
+        unique_id: cpu_monitor_load_5m
+        value_template: >-
+          {% if value_json.cpu.load_average is not none -%}
+          {{ value_json.cpu.load_average.five | round(2) }}
+          {%- endif %}
+        state_class: measurement
+        icon: mdi:gauge
+
+      - name: "CPU Load 15m"
+        unique_id: cpu_monitor_load_15m
+        value_template: >-
+          {% if value_json.cpu.load_average is not none -%}
+          {{ value_json.cpu.load_average.fifteen | round(2) }}
+          {%- endif %}
+        state_class: measurement
+        icon: mdi:gauge
+
+      - name: "CPU Uptime"
+        unique_id: cpu_monitor_uptime
+        value_template: >-
+          {% if value_json.cpu.uptime_s is not none -%}
+          {{ value_json.cpu.uptime_s }}
+          {%- endif %}
+        unit_of_measurement: "s"
+        device_class: duration
+        state_class: total_increasing
+        icon: mdi:clock-outline
+
+      - name: "CPU Process Count"
+        unique_id: cpu_monitor_process_count
+        value_template: "{{ value_json.cpu.processes | length }}"
+        state_class: measurement
+        icon: mdi:format-list-numbered
+
+      - name: "CPU Top Process"
+        unique_id: cpu_monitor_top_process
+        value_template: >-
+          {% if value_json.cpu.processes | length > 0 -%}
+          {{ (value_json.cpu.processes | sort(attribute='cpu_percent', reverse=true) | first).name }}
+          {%- else -%}
+          none
+          {%- endif %}
+        json_attributes_path: "$.cpu"
+        json_attributes:
+          - processes
+        icon: mdi:application-cog
