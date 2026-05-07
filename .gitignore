@@ -166,6 +166,13 @@ target/
 *.rs.bk
 Cargo.lock.bak
 
+# Swift Package Manager (front-mac)
+.build/
+.swiftpm/
+*.xcodeproj/
+*.xcworkspace/
+Package.resolved
+
 # Editor / IDE
 .vscode/
 .idea/
